@@ -184,6 +184,7 @@ class MouseLayer extends Layer {
         // init mouse move listiner
         canvas.addEventListener('mousemove', e => {
             this.eraseCanvas(canvas);
+            
             this.drawMouseStrock(context, 0, e.pageY - offsetTop, canvas.width, e.pageY - offsetTop);
             this.drawMouseStrock(context, e.pageX - offsetLeft, 0, e.pageX - offsetLeft, canvas.height);
 
