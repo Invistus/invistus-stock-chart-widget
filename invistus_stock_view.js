@@ -12,6 +12,7 @@ const LAYERS = {
 }
 
 const formatNumber = value => value && value.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const formatDateTime = dt => `${dt.getDate()}/${dt.getMonth()}/${dt.getFullYear().toString().substr(-2)} ${dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
 const floor = value => Math.floor(value);
 
 class InivistusStockView {
@@ -45,7 +46,7 @@ class Layer {
         if (!viewElement) {
             throw 'Canvas element not loaded';
         }
-        this.options = options
+        this.options = options ? options : {};
         this.viewElement = viewElement;
     }
 
@@ -78,16 +79,12 @@ class Chart extends Layer {
     render(data) {
         this.eraseCanvas(this.chartCanvasElement);
 
-
         // Create axis and update chart canvas area
         const padding = 0.2;
         const highest =  data.summary.high + ((data.summary.high - data.summary.low) * padding);
         const lowest = data.summary.low - ((data.summary.high - data.summary.low) * padding);
-
-        // Mouse
-        const mouseLayer = new MouseLayer({ viewElement: this.viewElement, ...this.options });
-        mouseLayer.render({ high: highest, low: lowest });
-        
+        const datetimes = data.data.map(item => formatDateTime(new Date(item.datetime)));
+       
         // Y Axis (prices)
         const yAxis = new YAxis({   width: this.chartCanvasElement.width,
                                     height: this.chartCanvasElement.height,
@@ -99,9 +96,15 @@ class Chart extends Layer {
         const xAxis = new XAxis({   width: this.chartCanvasElement.width,
                                     height: this.chartCanvasElement.height,
                                     viewElement: this.viewElement });
-        xAxis.render({ datetimes: data.data.map(item => item.datetime) });
+        xAxis.render({ datetimes: datetimes });
         this.chartCanvasElement.height -= xAxis.height;
 
+        // Mouse
+        const mouseLayer = new MouseLayer({ width: this.chartCanvasElement.width,
+                                            height: this.chartCanvasElement.height,
+                                            viewElement: this.viewElement });
+        mouseLayer.render({ high: highest, low: lowest, datetimes: datetimes });
+        
         const width = this.chartCanvasElement.width / data.data.length;
         const candlesticks = new Candlestick({  canvas: this.chartCanvasElement, 
                                                 high: highest, 
@@ -120,7 +123,7 @@ class MouseLayer extends Layer {
 
     constructor(options) {
         super(options);
-        this.mouseCanvasElement = this.createCanvas({ zIndex: LAYERS.mouse });
+        this.mouseCanvasElement = this.createCanvas({ zIndex: LAYERS.mouse, ...options });
     }
 
     render(data) {
@@ -147,7 +150,7 @@ class MouseLayer extends Layer {
 
     drawMouseRelativePosition(context, text, x, y) {
 
-        const padding = 1.3;
+        const padding = 1.2;
 
         context.beginPath();
         context.font = DEFAULT_FONT_AXIS;
@@ -157,17 +160,22 @@ class MouseLayer extends Layer {
         const rectWidth = textWidth * padding;
         const rectHeight = height * padding;
         context.fillStyle = '#000000';
-        context.fillRect(x - rectWidth, y - rectHeight, rectWidth, rectHeight);
+        let xRect = x - (rectWidth / 2);
+        xRect = xRect < 0 ? 0 : xRect;
+        const limit = this.mouseCanvasElement.width;
+        xRect = xRect + rectWidth > limit ? limit - rectWidth : xRect;
+        context.fillRect(xRect, y - rectHeight, rectWidth, rectHeight);
 
         const offsetWidth = rectWidth - textWidth;
         const offsetheight = rectHeight - height;
         context.fillStyle = '#FFFFFF';
-        context.fillText(text, x - textWidth - (offsetWidth/2), y + (rectHeight/2) - (offsetheight*3), textWidth);
+        let xText = xRect + (offsetWidth/2);
+        context.fillText(text, xText, y - (offsetheight/2) - 2, textWidth);
         context.closePath();
 
     }
 
-    initMouseEvents(canvas, { high, low }) {
+    initMouseEvents(canvas, { high, low , datetimes }) {
         const offsetLeft = 8;
         const offsetTop = 8;
 
@@ -178,11 +186,17 @@ class MouseLayer extends Layer {
             this.eraseCanvas(canvas);
             this.drawMouseStrock(context, 0, e.pageY - offsetTop, canvas.width, e.pageY - offsetTop);
             this.drawMouseStrock(context, e.pageX - offsetLeft, 0, e.pageX - offsetLeft, canvas.height);
-    
-            const value = formatNumber(high - (((e.pageY - offsetTop)/ canvas.height) * (high - low)));
 
-            this.drawMouseRelativePosition(context, value, canvas.width, e.pageY - offsetTop);
-            this.drawMouseRelativePosition(context, e.pageX - offsetLeft, e.pageX - offsetLeft, canvas.height);
+            // Y Axis mouse label
+            const yValue = formatNumber(high - (((e.pageY - offsetTop) / canvas.height) * (high - low)));
+            this.drawMouseRelativePosition(context, yValue, canvas.width, e.pageY - offsetTop);
+
+            // X Axis mouse label
+            const xValue = datetimes[floor(datetimes.length * ((e.pageX - offsetLeft) / canvas.width))];
+            const x = e.pageX - offsetLeft;
+            const y = canvas.height;
+            this.drawMouseRelativePosition(context, xValue, x, y);
+
         });
 
         canvas.addEventListener('mouseout', e => {
@@ -196,7 +210,6 @@ class YAxis extends Layer {
 
     constructor(options) {
         super(options);
-        this.options = options ? options : {};
         this.canvasElement = this.createCanvas({ zIndex: LAYERS.yaxis, ...options });
     }
 
@@ -243,14 +256,14 @@ class XAxis extends Layer {
 
     constructor(options) {
         super(options);
-        this.options = options ? options : {};
         this.canvasElement = this.createCanvas({ zIndex: LAYERS.yaxis, ...options });
     }
 
     render({ datetimes }) {
 
-        const formatDateTime = dt => `${dt.getDate()}/${dt.getMonth()}/${dt.getFullYear().toString().substr(-2)} ${dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-        const timestamps = datetimes.map(dt => formatDateTime(new Date(dt)));
+        if (!datetimes || datetimes.length == 0) {
+            throw 'No datetimes found for X axis';
+        }
 
         const canvasWidth = this.canvasElement.width;
         const canvasHeight = this.canvasElement.height;
@@ -259,30 +272,21 @@ class XAxis extends Layer {
         context.font = DEFAULT_FONT_AXIS;
 
         const padding = 0.2;
-        const width = Math.ceil(context.measureText(timestamps[0]).width * (padding + 1));
+        const width = Math.ceil(context.measureText(datetimes[0]).width * (padding + 1));
 
         const lineHeight = parseInt(context.font);
         this.height = lineHeight;
 
-        // const offsetWidth = 2;
-
         context.beginPath();
-
-        // context.strokeStyle = '#D3D3D3';
-        // context.moveTo(this.viewElement.offsetWidth - width - offsetWidth, 0);
-        // context.lineTo(this.viewElement.offsetWidth - width - offsetWidth, canvasHeight);
-        // context.stroke();
-
-        // context.fillStyle = 'rgba(255, 255, 255, 0)';
-        // context.fillRect(canvasWidth, 0, width, canvasHeight);
-
         context.fillStyle = '#000000';
-        const columnWidth = this.canvasElement.width / timestamps.length;
+        const columnWidth = canvasWidth / datetimes.length;
         let currentWidth = 0;
         let i = 0;
-        timestamps.forEach((item, index) => {
-                if ((columnWidth * index) >= currentWidth) {
-                    context.fillText(item, width * i + (width * (padding/2)), canvasHeight - lineHeight, width);      
+        let y = canvasHeight - lineHeight;
+        datetimes.forEach((item, index) => {
+                let x = width * i + (width * (padding/2));
+                if ((columnWidth * index) > currentWidth && x + width < canvasWidth) {
+                    context.fillText(item, x, y, width);      
                     currentWidth =  width * ++i;
                 }
             });
